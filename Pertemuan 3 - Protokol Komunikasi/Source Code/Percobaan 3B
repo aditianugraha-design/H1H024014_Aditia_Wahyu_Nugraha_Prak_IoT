@@ -1,0 +1,93 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>          // pastikan versi 7.x terpasang (Library Manager)
+#include <DHT.h>                  // ditambahkan agar suhu/kelembaban dibaca dari sensor asli
+
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+const char* ssid     = "NAMA_WIFI_ANDA";
+const char* password = "PASSWORD_WIFI_ANDA";
+
+const char* mqttServer = "broker.hivemq.com";
+const int   mqttPort   = 1883;
+const char* mqttTopic  = "unsoed/tk245004/kelompokAnda/sensor";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+unsigned long waktuTerakhirKirim = 0;
+const unsigned long INTERVAL_KIRIM = 5000;
+
+void hubungkanWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Menghubungkan ke WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi berhasil terhubung!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void hubungkanMQTT() {
+  while (!client.connected()) {
+    Serial.print("Menghubungkan ke broker MQTT...");
+    String clientId = "ESP32Client-" + String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str())) {
+      Serial.println("berhasil terhubung!");
+    } else {
+      Serial.print("gagal, rc=");
+      Serial.print(client.state());
+      Serial.println(" coba lagi dalam 2 detik");
+      delay(2000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  hubungkanWiFi();
+  client.setServer(mqttServer, mqttPort);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    hubungkanWiFi();
+  }
+
+  if (!client.connected()) {
+    hubungkanMQTT();
+  }
+  client.loop();
+
+  // Kirim data setiap 5 detik tanpa memblokir client.loop()
+  if (millis() - waktuTerakhirKirim >= INTERVAL_KIRIM) {
+    waktuTerakhirKirim = millis();
+
+    float suhu      = dht.readTemperature();
+    float kelembaban = dht.readHumidity();
+
+    if (isnan(suhu) || isnan(kelembaban)) {
+      Serial.println("Gagal membaca sensor DHT11!");
+      return;
+    }
+
+    JsonDocument doc;
+    doc["suhu"]       = suhu;
+    doc["kelembaban"] = kelembaban;
+
+    char buffer[128];
+    serializeJson(doc, buffer);
+
+    client.publish(mqttTopic, buffer);
+    Serial.print("Data terkirim ke topic ");
+    Serial.print(mqttTopic);
+    Serial.print(": ");
+    Serial.println(buffer);
+  }
+}
